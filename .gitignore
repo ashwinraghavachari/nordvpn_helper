@@ -1,0 +1,22 @@
+# Logs
+*.log
+Library/Logs/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Temporary files
+*.swp
+*.swo
+*~
+*.tmp
+
+# User-specific files (if any)
+*.plist.local
+
+# Keep the template plist file, but ignore user-specific ones
+# Uncomment if you want to ignore the plist template too
+# com.user.nordvpn.captiveportal.plist
