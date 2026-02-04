@@ -1,11 +1,14 @@
 #!/bin/bash
 
 # NordVPN Captive Portal Handler for macOS
-# This script monitors network connectivity and automatically pauses/unpauses NordVPN
-# when encountering captive portals (public WiFi login pages)
+# This script prevents NordVPN crash loops when connecting to WiFi networks with captive portals
 # 
-# Key improvement: Immediately disconnects VPN when network changes to prevent
-# connection attempts during captive portal authentication
+# Strategy:
+# 1. Disable NordVPN when there is no network connection
+# 2. After connecting to a WiFi network, wait for internet connectivity (captive portal completion)
+# 3. Only enable/connect NordVPN once there is a real internet connection
+#
+# This proactive approach prevents VPN connection attempts during captive portal authentication
 
 LOGFILE="$HOME/Library/Logs/nordvpn_captive_portal.log"
 CHECK_INTERVAL=2  # seconds between checks (reduced for faster detection)
@@ -116,25 +119,9 @@ connect_vpn() {
     fi
 }
 
-check_captive_portal() {
-    # Try to detect captive portal by checking if we can reach the internet
-    # Apple uses captive.apple.com for captive portal detection
-    
-    # Method 1: Check Apple's captive portal detection
-    response=$(curl -s -I -m 3 http://captive.apple.com/hotspot-detect.html 2>/dev/null)
-    
-    if echo "$response" | grep -qi "HTTP/1.1 200"; then
-        # Check if response contains actual content (not redirect to captive portal)
-        body=$(curl -s -m 3 http://captive.apple.com/hotspot-detect.html 2>/dev/null)
-        if echo "$body" | grep -qi "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"; then
-            # No captive portal - normal internet connection
-            return 1
-        fi
-    fi
-    
-    # Possible captive portal detected
-    return 0
-}
+# Note: We no longer use explicit captive portal detection
+# Instead, we simply check for internet connectivity - if there's no internet,
+# we assume it could be a captive portal and keep VPN disconnected
 
 check_internet_connectivity() {
     # Check if we have actual internet connectivity (not just captive portal page)
@@ -163,19 +150,31 @@ get_network_interface() {
 main_loop() {
     log_message "NordVPN Captive Portal Handler started"
     
-    local vpn_was_disconnected=false
-    local disconnect_start_time=0
     local last_ssid=""
     local last_interface=""
-    local network_changed=false
-    local stabilization_wait=0
+    local network_stabilization_wait=0
+    local waiting_for_internet=false
     
     while true; do
         current_ssid=$(get_current_ssid)
         current_interface=$(get_network_interface)
         
-        # Detect network changes (SSID or interface change)
-        network_changed=false
+        # STEP 1: Check if we have a network connection at all
+        if [[ -z "$current_ssid" && -z "$current_interface" ]]; then
+            # No network connection - disconnect VPN and keep it disconnected
+            if is_vpn_connected || is_vpn_connecting; then
+                log_message "No network connection detected - disconnecting VPN"
+                disconnect_vpn
+            fi
+            waiting_for_internet=false
+            last_ssid=""
+            last_interface=""
+            sleep $CHECK_INTERVAL
+            continue
+        fi
+        
+        # STEP 2: Detect network changes (SSID or interface change)
+        local network_changed=false
         if [[ "$current_ssid" != "$last_ssid" ]]; then
             if [[ -n "$current_ssid" && -n "$last_ssid" ]]; then
                 network_changed=true
@@ -193,103 +192,65 @@ main_loop() {
             last_interface="$current_interface"
         fi
         
-        # CRITICAL: Immediately disconnect VPN when network changes to prevent connection attempts
+        # STEP 3: When network changes, disconnect VPN and wait for internet
         if [[ "$network_changed" == true ]]; then
-            log_message "Network change detected - immediately disconnecting VPN to prevent captive portal conflicts"
+            log_message "Network change detected - disconnecting VPN and waiting for internet connectivity"
             
-            # Disconnect VPN immediately, even if connecting
+            # Disconnect VPN immediately when network changes
             if is_vpn_connected || is_vpn_connecting; then
                 disconnect_vpn
-                vpn_was_disconnected=true
-                disconnect_start_time=$(date +%s)
-                stabilization_wait=$NETWORK_STABILIZATION_DELAY
-            else
-                # Ensure VPN stays disconnected during network transition
-                vpn_was_disconnected=true
-                disconnect_start_time=$(date +%s)
-                stabilization_wait=$NETWORK_STABILIZATION_DELAY
             fi
             
-            # Wait for network to stabilize before checking for captive portal
-            continue
-        fi
-        
-        # Wait for network stabilization after change
-        if [[ $stabilization_wait -gt 0 ]]; then
-            stabilization_wait=$((stabilization_wait - CHECK_INTERVAL))
+            # Set flag to wait for internet before reconnecting VPN
+            waiting_for_internet=true
+            network_stabilization_wait=$NETWORK_STABILIZATION_DELAY
+            
+            # Wait for network to stabilize
             sleep $CHECK_INTERVAL
             continue
         fi
         
-        # Only proceed if we have a network connection
-        if [[ -z "$current_ssid" && -z "$current_interface" ]]; then
-            # No network connection
-            if is_vpn_connected; then
-                log_message "No network connection detected, disconnecting VPN"
-                disconnect_vpn
-                vpn_was_disconnected=false
-            fi
+        # STEP 4: Wait for network stabilization after change
+        if [[ $network_stabilization_wait -gt 0 ]]; then
+            network_stabilization_wait=$((network_stabilization_wait - CHECK_INTERVAL))
             sleep $CHECK_INTERVAL
             continue
         fi
         
-        # Check for captive portal
-        if check_captive_portal; then
-            # Captive portal detected
-            if ! $vpn_was_disconnected; then
-                log_message "Captive portal detected on network '$current_ssid'"
-                
-                if is_vpn_connected || is_vpn_connecting; then
-                    disconnect_vpn
-                    vpn_was_disconnected=true
-                    disconnect_start_time=$(date +%s)
-                    log_message "VPN disconnected. Please complete captive portal login in your browser."
-                    
-                    # Open the captive portal page
-                    open "http://captive.apple.com/hotspot-detect.html" 2>/dev/null
-                fi
+        # STEP 5: Check for internet connectivity (captive portal completion)
+        if check_internet_connectivity; then
+            # We have internet connectivity - captive portal is complete (or never existed)
+            if $waiting_for_internet; then
+                log_message "Internet connectivity confirmed on network '$current_ssid' - connecting VPN"
+                waiting_for_internet=false
             fi
             
-            # Check if we've been waiting too long
-            if $vpn_was_disconnected; then
-                current_time=$(date +%s)
-                elapsed=$((current_time - disconnect_start_time))
-                
-                if [[ $elapsed -gt $CAPTIVE_PORTAL_TIMEOUT ]]; then
-                    log_message "Captive portal timeout reached (${CAPTIVE_PORTAL_TIMEOUT}s). Checking connectivity..."
-                    if check_internet_connectivity; then
-                        log_message "Internet connectivity detected. Reconnecting VPN."
-                        connect_vpn
-                        vpn_was_disconnected=false
-                    else
-                        log_message "Still no internet connectivity. VPN will remain disconnected."
-                    fi
-                fi
+            # Connect VPN if not already connected
+            if ! is_vpn_connected && ! is_vpn_connecting; then
+                log_message "VPN not connected - connecting now"
+                connect_vpn
+            elif is_vpn_connecting; then
+                # VPN is connecting, just wait
+                :
             fi
             
         else
-            # No captive portal detected - check internet connectivity
-            if check_internet_connectivity; then
-                # We have internet connectivity
-                if $vpn_was_disconnected; then
-                    log_message "Internet connectivity confirmed. Captive portal cleared. Reconnecting VPN."
-                    connect_vpn
-                    vpn_was_disconnected=false
-                else
-                    # Normal operation - VPN should be connected if no captive portal
-                    # Note: We don't auto-connect here to respect manual disconnections
-                    # If you want auto-reconnect, uncomment the following:
-                    # if ! is_vpn_connected && ! is_vpn_connecting; then
-                    #     log_message "VPN not connected. Use 'nordvpn connect' to reconnect."
-                    # fi
-                    : # No-op to satisfy bash syntax
-                fi
-            else
-                # No internet connectivity but no captive portal detected
-                # This might be a temporary network issue
-                if is_vpn_connected; then
-                    log_message "No internet connectivity detected. VPN may be blocking or network issue."
-                fi
+            # No internet connectivity - keep VPN disconnected
+            # This means we're either:
+            # 1. On a network with captive portal (waiting for user to complete login)
+            # 2. Network issue
+            # 3. VPN was blocking (but VPN should be disconnected)
+            
+            if ! $waiting_for_internet; then
+                # First time detecting no internet - log it
+                log_message "No internet connectivity detected on network '$current_ssid' - keeping VPN disconnected"
+                waiting_for_internet=true
+            fi
+            
+            # Ensure VPN is disconnected while waiting for internet
+            if is_vpn_connected || is_vpn_connecting; then
+                log_message "Disconnecting VPN - waiting for internet connectivity"
+                disconnect_vpn
             fi
         fi
         

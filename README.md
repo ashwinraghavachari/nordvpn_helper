@@ -102,7 +102,35 @@ All logs are stored in `~/Library/Logs/`:
 
 ## Management
 
-**Start/Stop:**
+### Easy Control (Recommended)
+
+Use the control script for easy enable/disable:
+
+```bash
+# Enable the script
+~/nordvpn_helper_control.sh start
+# or: ~/nordvpn_helper_control.sh enable
+# or: ~/nordvpn_helper_control.sh on
+
+# Disable the script
+~/nordvpn_helper_control.sh stop
+# or: ~/nordvpn_helper_control.sh disable
+# or: ~/nordvpn_helper_control.sh off
+
+# Check status
+~/nordvpn_helper_control.sh status
+
+# Restart the script
+~/nordvpn_helper_control.sh restart
+
+# View live logs
+~/nordvpn_helper_control.sh logs
+```
+
+### Manual Control
+
+If you prefer manual control:
+
 ```bash
 # Stop
 launchctl unload ~/Library/LaunchAgents/com.user.nordvpn.captiveportal.plist
