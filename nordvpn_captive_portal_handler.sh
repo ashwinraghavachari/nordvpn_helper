@@ -19,21 +19,41 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOGFILE"
 }
 
+check_nordvpn_installed() {
+    # Check if NordVPN app is installed
+    if [ ! -d "/Applications/NordVPN.app" ]; then
+        return 1
+    fi
+    return 0
+}
+
 ensure_nordvpn_running() {
+    # First check if NordVPN is installed
+    if ! check_nordvpn_installed; then
+        return 1
+    fi
+    
     # Check if NordVPN app is running, launch if not
     if ! pgrep -f "NordVPN.app" > /dev/null; then
         log_message "NordVPN app not running, launching..."
         open -a NordVPN 2>/dev/null
         sleep 3  # Wait for app to start
     fi
+    return 0
 }
 
 is_vpn_connected() {
+    # Check if NordVPN is installed first
+    if ! check_nordvpn_installed; then
+        return 1
+    fi
+    
     # Method 1: Try AppleScript (if NordVPN supports it)
-    ensure_nordvpn_running
-    state=$(osascript -e 'tell application "NordVPN" to get state' 2>/dev/null)
-    if [[ $? -eq 0 ]] && echo "$state" | grep -qi "connected"; then
-        return 0
+    if ensure_nordvpn_running; then
+        state=$(osascript -e 'tell application "NordVPN" to get state' 2>/dev/null)
+        if [[ $? -eq 0 ]] && echo "$state" | grep -qi "connected"; then
+            return 0
+        fi
     fi
     
     # Method 2: Check for VPN network interfaces (utun interfaces typically used by VPNs)
@@ -56,11 +76,17 @@ is_vpn_connected() {
 }
 
 is_vpn_connecting() {
+    # Check if NordVPN is installed first
+    if ! check_nordvpn_installed; then
+        return 1
+    fi
+    
     # Check if NordVPN is in a connecting state
-    ensure_nordvpn_running
-    state=$(osascript -e 'tell application "NordVPN" to get state' 2>/dev/null)
-    if [[ $? -eq 0 ]] && echo "$state" | grep -qiE "(connecting|reconnecting)"; then
-        return 0
+    if ensure_nordvpn_running; then
+        state=$(osascript -e 'tell application "NordVPN" to get state' 2>/dev/null)
+        if [[ $? -eq 0 ]] && echo "$state" | grep -qiE "(connecting|reconnecting)"; then
+            return 0
+        fi
     fi
     
     # Fallback: Check if NordVPN process is running but no VPN interface yet
@@ -72,9 +98,18 @@ is_vpn_connecting() {
 }
 
 disconnect_vpn() {
+    # Check if NordVPN is installed
+    if ! check_nordvpn_installed; then
+        log_message "NordVPN not installed - skipping disconnect"
+        return 1
+    fi
+    
     log_message "Disconnecting NordVPN to prevent connection during captive portal..."
     
-    ensure_nordvpn_running
+    if ! ensure_nordvpn_running; then
+        log_message "Failed to launch NordVPN app"
+        return 1
+    fi
     
     # Method 1: Try AppleScript disconnect
     osascript -e 'tell application "NordVPN" to disconnect' 2>/dev/null
@@ -93,12 +128,22 @@ disconnect_vpn() {
     fi
     
     log_message "NordVPN disconnect attempted"
+    return 0
 }
 
 connect_vpn() {
+    # Check if NordVPN is installed
+    if ! check_nordvpn_installed; then
+        log_message "NordVPN not installed - skipping connect"
+        return 1
+    fi
+    
     log_message "Connecting NordVPN..."
     
-    ensure_nordvpn_running
+    if ! ensure_nordvpn_running; then
+        log_message "Failed to launch NordVPN app"
+        return 1
+    fi
     
     # Method 1: Try AppleScript connect
     osascript -e 'tell application "NordVPN" to connect' 2>/dev/null
@@ -149,6 +194,15 @@ get_network_interface() {
 
 main_loop() {
     log_message "NordVPN Captive Portal Handler started"
+    
+    # Check if NordVPN is installed at startup
+    if ! check_nordvpn_installed; then
+        log_message "WARNING: NordVPN app not found at /Applications/NordVPN.app"
+        log_message "The script will continue running but VPN control functions will be skipped."
+        log_message "Install NordVPN from https://nordvpn.com/download/mac/ to enable VPN management."
+    else
+        log_message "NordVPN app detected - VPN management enabled"
+    fi
     
     local last_ssid=""
     local last_interface=""
