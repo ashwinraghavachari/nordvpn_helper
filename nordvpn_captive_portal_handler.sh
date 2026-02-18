@@ -80,7 +80,7 @@ vpn_connect() {
     fi
     ensure_nordvpn_running
     log "INFO" "Connecting VPN..."
-    osascript -e 'tell application "NordVPN" to connect' 2>/dev/null
+    osascript -e 'open location "nordvpn://connect"' 2>/dev/null
 }
 
 vpn_disconnect() {
@@ -89,7 +89,7 @@ vpn_disconnect() {
     fi
     ensure_nordvpn_running
     log "INFO" "Disconnecting VPN..."
-    osascript -e 'tell application "NordVPN" to disconnect' 2>/dev/null
+    osascript -e 'open location "nordvpn://disconnect"' 2>/dev/null
     sleep 1
 }
 
