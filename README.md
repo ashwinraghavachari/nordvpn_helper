@@ -2,6 +2,24 @@
 
 Automatically manages NordVPN on macOS to prevent crash loops when connecting to WiFi networks with captive portals (hotel, coffee shop, airport logins).
 
+## Quick Reference
+
+```bash
+# Service
+~/nordvpn_helper_control.sh start       # Turn the script ON
+~/nordvpn_helper_control.sh stop        # Turn the script OFF
+~/nordvpn_helper_control.sh restart     # Restart (also relaunches NordVPN)
+~/nordvpn_helper_control.sh status      # Is it running? What networks are trusted?
+~/nordvpn_helper_control.sh logs        # Watch live logs (Ctrl+C to exit)
+
+# Trusted networks (WiFi SSIDs where VPN will NOT connect)
+~/nordvpn_helper_control.sh trust       # Trust the WiFi you're on right now
+~/nordvpn_helper_control.sh trust "Name"    # Trust a network by name
+~/nordvpn_helper_control.sh untrust         # Remove current WiFi from trust list
+~/nordvpn_helper_control.sh untrust "Name"  # Remove a network by name
+~/nordvpn_helper_control.sh trusted         # List all trusted networks
+```
+
 ## Problem Solved
 
 When connecting to a captive portal network, NordVPN's auto-connect triggers before you can reach the login page. This causes:
