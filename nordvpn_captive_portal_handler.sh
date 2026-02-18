@@ -114,10 +114,21 @@ get_gateway_ip() {
     route get default 2>/dev/null | awk '/gateway:/{print $2}'
 }
 
-# Returns a stable identifier for the current network.
-# Prefers the Wi-Fi SSID (requires Terminal → Location Services on Sequoia).
-# Falls back to "gw:<gateway-ip>" which requires no permissions and is unique
-# enough for trusted-network purposes on most networks.
+# Returns the router's MAC address from the ARP table.
+# The MAC is globally unique to the physical router hardware, so
+# gw:IP/MAC never collides between different networks even when they
+# share the same gateway IP (e.g. 192.168.0.1 or 192.168.1.1).
+get_router_mac() {
+    local gw
+    gw=$(get_gateway_ip)
+    [[ -z "$gw" ]] && return
+    arp -n "$gw" 2>/dev/null | awk '{print $4}'
+}
+
+# Returns a stable, unique identifier for the current network.
+# Prefers the Wi-Fi SSID (requires Terminal Location Services on Sequoia).
+# Falls back to "gw:<ip>/<router-mac>" — requires no permissions and is
+# globally unique because the router MAC is a hardware address.
 get_network_id() {
     local iface
     iface=$(get_wifi_interface)
@@ -136,10 +147,12 @@ get_network_id() {
                    -I 2>/dev/null | awk '/ SSID:/ {print $2}')
         [[ -n "$ssid" ]] && { echo "$ssid"; return; }
     fi
-    # No SSID readable — fall back to gateway IP as network identifier
-    local gw
+    # No SSID readable — use gateway IP + router MAC as unique fingerprint
+    local gw mac
     gw=$(get_gateway_ip)
-    [[ -n "$gw" ]] && echo "gw:$gw"
+    mac=$(get_router_mac)
+    [[ -n "$gw" && -n "$mac" ]] && echo "gw:${gw}/${mac}" && return
+    [[ -n "$gw" ]]              && echo "gw:${gw}"
 }
 
 # Keep get_ssid as an alias so nothing else breaks
@@ -158,12 +171,14 @@ canary_reachable() {
 is_trusted_network() {
     local network_id="$1"
     [ ! -f "$TRUSTED_NETWORKS_FILE" ] && return 1
-    # Check the primary identifier (SSID or gw:IP)
+    # Exact match on the full network ID (SSID or gw:IP/MAC)
     [[ -n "$network_id" ]] && grep -qxF "$network_id" "$TRUSTED_NETWORKS_FILE" && return 0
-    # Always also check the gateway IP so that either form of entry matches
-    local gw
-    gw="gw:$(get_gateway_ip)"
-    [[ "$gw" != "gw:" ]] && grep -qxF "$gw" "$TRUSTED_NETWORKS_FILE" && return 0
+    # Also check bare gateway IP for backwards compatibility with old entries
+    local gw mac
+    gw=$(get_gateway_ip)
+    mac=$(get_router_mac)
+    [[ -n "$gw" && -n "$mac" ]] && grep -qxF "gw:${gw}/${mac}" "$TRUSTED_NETWORKS_FILE" && return 0
+    [[ -n "$gw" ]]              && grep -qxF "gw:${gw}"         "$TRUSTED_NETWORKS_FILE" && return 0
     return 1
 }
 

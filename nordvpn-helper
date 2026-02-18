@@ -7,9 +7,24 @@ SERVICE_NAME="com.user.nordvpn.captiveportal"
 TRUSTED_NETWORKS_FILE="$HOME/.nordvpn_trusted_networks"
 CMD="nordvpn-helper"
 
-# ── Helper: current network identifier ────────────────────────
-# Returns the Wi-Fi SSID when Location Services allows it (macOS Sequoia+),
-# or falls back to "gw:<gateway-ip>" which needs no special permissions.
+# ── Helpers: network identification ───────────────────────────
+
+_get_gateway_ip() {
+    route get default 2>/dev/null | awk '/gateway:/{print $2}'
+}
+
+_get_router_mac() {
+    local gw
+    gw=$(_get_gateway_ip)
+    [[ -z "$gw" ]] && return
+    arp -n "$gw" 2>/dev/null | awk '{print $4}'
+}
+
+# Returns a stable, unique identifier for the current network.
+# Prefers the Wi-Fi SSID (requires Terminal Location Services on Sequoia).
+# Falls back to "gw:<ip>/<router-mac>" — requires no permissions and is
+# globally unique (router MAC is a hardware address, never shared between
+# networks even when they use the same gateway IP like 192.168.0.1).
 current_network_id() {
     local iface
     iface=$(networksetup -listallhardwareports 2>/dev/null \
@@ -24,21 +39,39 @@ current_network_id() {
                 return
                 ;;
         esac
-        # airport fallback for older macOS
         local ssid
         ssid=$(/System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport \
                    -I 2>/dev/null | awk '/ SSID:/ {print $2}')
         [[ -n "$ssid" ]] && { echo "$ssid"; return; }
     fi
 
-    # Fall back to gateway IP — no permissions needed, unique per router
-    local gw
-    gw=$(route get default 2>/dev/null | awk '/gateway:/{print $2}')
-    [[ -n "$gw" ]] && echo "gw:$gw"
+    local gw mac
+    gw=$(_get_gateway_ip)
+    mac=$(_get_router_mac)
+    [[ -n "$gw" && -n "$mac" ]] && echo "gw:${gw}/${mac}" && return
+    [[ -n "$gw" ]]              && echo "gw:${gw}"
 }
 
-# Alias used in older parts of the script
 current_ssid() { current_network_id; }
+
+# Human-readable label for a network ID
+_network_label() {
+    local id="$1"
+    case "$id" in
+        gw:*/*)
+            local ip mac
+            ip="${id#gw:}"; ip="${ip%/*}"
+            mac="${id##*/}"
+            echo "router $ip  (MAC $mac)"
+            ;;
+        gw:*)
+            echo "gateway ${id#gw:}  (MAC unknown — re-run 'trust' to upgrade)"
+            ;;
+        *)
+            echo "'$id'  (SSID)"
+            ;;
+    esac
+}
 
 # ── Helper: resolve SSID from arg or current network ──────────
 # Writes to stdout on success; writes error to stderr and returns 1 on failure.
@@ -101,13 +134,15 @@ case "$1" in
         fi
         echo ""
         CURRENT=$(current_network_id)
+        GW=$(_get_gateway_ip); MAC=$(_get_router_mac)
         if [[ -n "$CURRENT" ]]; then
-            if [[ "$CURRENT" == gw:* ]]; then
-                LABEL="gateway ${CURRENT#gw:} (SSID unavailable — no Location Services permission)"
-            else
-                LABEL="'$CURRENT'"
-            fi
-            if [[ -f "$TRUSTED_NETWORKS_FILE" ]] && grep -qxF "$CURRENT" "$TRUSTED_NETWORKS_FILE" 2>/dev/null; then
+            LABEL=$(_network_label "$CURRENT")
+            # Trusted if exact match OR bare gw:IP matches (backwards compat)
+            TRUSTED=false
+            grep -qxF "$CURRENT"            "$TRUSTED_NETWORKS_FILE" 2>/dev/null && TRUSTED=true
+            [[ -n "$GW" && -n "$MAC" ]] && grep -qxF "gw:${GW}/${MAC}" "$TRUSTED_NETWORKS_FILE" 2>/dev/null && TRUSTED=true
+            [[ -n "$GW" ]]              && grep -qxF "gw:${GW}"         "$TRUSTED_NETWORKS_FILE" 2>/dev/null && TRUSTED=true
+            if $TRUSTED; then
                 echo "Current network: $LABEL  ✓ trusted — VPN will not connect"
             else
                 echo "Current network: $LABEL  (not trusted — VPN will connect)"
@@ -220,14 +255,16 @@ case "$1" in
 
         # Network ID detection
         NETID=$(current_network_id)
-        if [[ "$NETID" == gw:* ]]; then
-            GW="${NETID#gw:}"
-            echo "~ Network ID: gateway $GW (SSID unavailable)"
-            echo "  SSID reading requires Location Services for Terminal on macOS Sequoia."
-            echo "  The gateway IP fallback is used instead — trusted networks still work."
-            echo "  To enable SSID reading (optional):"
+        if [[ "$NETID" == gw:*/* ]]; then
+            echo "✓ Network ID: $(_network_label "$NETID")"
+            echo "  (SSID unavailable — using router MAC as unique identifier)"
+            echo "  To also enable SSID reading (optional):"
             echo "    System Settings → Privacy & Security → Location Services"
             echo "    → System Services → Details → Wi-Fi Networking → ON"
+        elif [[ "$NETID" == gw:* ]]; then
+            echo "~ Network ID: $(_network_label "$NETID")"
+            echo "  Gateway IP alone is not unique. Re-run '$CMD trust' to upgrade"
+            echo "  this entry to use the router MAC address for reliable identification."
         elif [[ -n "$NETID" ]]; then
             echo "✓ Network ID: '$NETID' (SSID)"
         else
@@ -250,14 +287,13 @@ case "$1" in
     trusted)
         # List all trusted networks
         CURRENT=$(current_network_id)
-        GW="gw:$(route get default 2>/dev/null | awk '/gateway:/{print $2}')"
+        GW=$(_get_gateway_ip); MAC=$(_get_router_mac)
         if [[ ! -f "$TRUSTED_NETWORKS_FILE" ]] || [[ ! -s "$TRUSTED_NETWORKS_FILE" ]]; then
             echo "No trusted networks configured."
             echo ""
             echo "To add the current network:  $CMD trust"
             echo "To add a named network:      $CMD trust \"Network Name\""
         else
-            # Warn when SSID-based entries exist but SSID is currently unreadable
             NAME_ENTRIES=$(grep -v '^gw:' "$TRUSTED_NETWORKS_FILE" 2>/dev/null | grep -v '^$' || true)
             if [[ "$CURRENT" == gw:* ]] && [[ -n "$NAME_ENTRIES" ]]; then
                 echo "Warning: SSID is unreadable on this machine (macOS Sequoia without"
@@ -269,12 +305,12 @@ case "$1" in
             echo "Trusted networks:"
             while IFS= read -r line; do
                 [[ -z "$line" ]] && continue
-                if [[ "$line" == gw:* ]]; then
-                    label="${line}  (by gateway IP)"
-                else
-                    label="$line  (by SSID name — re-run 'trust' to add gateway entry)"
-                fi
-                if [[ "$line" == "$CURRENT" ]] || [[ "$line" == "$GW" ]]; then
+                label=$(_network_label "$line")
+                is_current=false
+                [[ "$line" == "$CURRENT" ]] && is_current=true
+                [[ -n "$GW" && -n "$MAC" && "$line" == "gw:${GW}/${MAC}" ]] && is_current=true
+                [[ -n "$GW" && "$line" == "gw:${GW}" ]] && is_current=true
+                if $is_current; then
                     echo "  - $label  ← currently connected"
                 else
                     echo "  - $label"
