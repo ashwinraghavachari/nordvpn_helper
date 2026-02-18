@@ -73,6 +73,17 @@ case "$1" in
             echo "✗ Script is STOPPED"
         fi
         echo ""
+        CURRENT=$(current_ssid)
+        if [[ -n "$CURRENT" ]]; then
+            if [[ -f "$TRUSTED_NETWORKS_FILE" ]] && grep -qxF "$CURRENT" "$TRUSTED_NETWORKS_FILE" 2>/dev/null; then
+                echo "Current network: '$CURRENT' (trusted — VPN will not connect)"
+            else
+                echo "Current network: '$CURRENT' (not trusted — VPN will connect)"
+            fi
+        else
+            echo "Current network: ethernet / no WiFi SSID detected"
+        fi
+        echo ""
         if [[ -f "$TRUSTED_NETWORKS_FILE" ]] && [[ -s "$TRUSTED_NETWORKS_FILE" ]]; then
             echo "Trusted networks ($(grep -c . "$TRUSTED_NETWORKS_FILE")):"
             grep -v '^$' "$TRUSTED_NETWORKS_FILE" | sed 's/^/  - /'
