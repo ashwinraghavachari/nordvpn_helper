@@ -1,85 +1,75 @@
 # NordVPN Captive Portal Handler
 
-Automatically prevents NordVPN from spin-looping on WiFi networks with captive portals, while leaving NordVPN's own auto-connect and trusted-network settings fully in charge.
+Automatically manages NordVPN on macOS to prevent crash loops when connecting to WiFi networks with captive portals (hotel, coffee shop, airport logins).
 
 ## Problem Solved
 
-When connecting to WiFi networks with captive portals (public WiFi login pages), NordVPN's auto-connect triggers before you can authenticate. This causes:
-- Connection failures and NordVPN spinning indefinitely
-- Inability to reach the captive portal login page
+When connecting to a captive portal network, NordVPN's auto-connect triggers before you can reach the login page. This causes:
+- NordVPN spinning and failing to connect indefinitely
+- No way to reach the captive portal login page
 - Crash loops requiring manual intervention
 
-## How It Works (Hybrid Approach)
+## How It Works
 
-NordVPN's **auto-connect stays ON** at all times. The script acts only as a temporary "hold" during captive portal authentication, then hands full control back to NordVPN.
-
-1. **On network change**: temporarily disables auto-connect and disconnects VPN to stop NordVPN fighting the captive portal
-2. **Pings a canary** (google.com) every 2 seconds to detect when real internet is available
-3. **Once the canary passes**: re-enables auto-connect — NordVPN reconnects on its own, applying its own **Trusted Networks** logic
-4. **On clean exit**: always re-enables auto-connect so NordVPN is left in a normal state
-
-Because NordVPN handles the reconnect decision, its built-in **Trusted Networks** setting works exactly as configured in the NordVPN app — no separate config file needed.
+1. **Disables NordVPN auto-connect** on startup so this script has full control
+2. **Disconnects VPN** immediately on any network change
+3. **Pings a canary** (google.com) every 2 seconds to detect when real internet is available
+4. **Connects VPN** automatically once the canary responds — unless the network is trusted
+5. **Re-enables auto-connect** when the script is stopped cleanly
 
 ```
-No Network ──► Paused (auto-connect off, VPN disconnected)
-                  │
-                  │  canary ping succeeds
-                  ▼
-              Active (auto-connect re-enabled → NordVPN decides)
-                  │
-                  │  network lost
-                  ▼
-              No Network
+No Network ──► Waiting ──► (canary passes, not trusted) ──► VPN Connected
+                  │                                               │
+                  └──► (canary passes, trusted SSID) ──► VPN Off │
+                                                                  │
+              (network lost) ◄────────────────────────────────────┘
 ```
+
+> **Why disable auto-connect?** NordVPN loads `isAutoConnectOn` into memory at app startup and caches it. The only way to reliably prevent NordVPN from fighting the script is to disable auto-connect before the session begins. The script re-enables it on clean exit.
 
 ## Required NordVPN Settings
 
-| Setting | Value | Why |
-|---------|-------|-----|
-| **Auto-connect** | ON | The script re-enables this; NordVPN uses it to reconnect after captive portal auth |
-| **Trusted Networks** | Configure in NordVPN app | NordVPN's own logic — the script does not interfere |
+| Setting | Required value | Notes |
+|---------|----------------|-------|
+| **Auto-connect** | ON in NordVPN app | Script manages this automatically — it disables auto-connect on startup, re-enables on stop |
 
-Configure Trusted Networks in: **NordVPN → Preferences → Auto-connect → Trusted Networks**
+No other NordVPN settings need to change. Trusted networks are managed by this script (see below), not by NordVPN's built-in Trusted Networks feature.
 
 ## Requirements
 
-### System Requirements
-- **macOS 10.14 (Mojave) or later**
+### System
+- macOS 10.14 (Mojave) or later
 - Standard user account (no admin/root required)
 
-### Software Requirements
-- **NordVPN macOS App** installed and logged in
-  - Download: https://nordvpn.com/download/mac/
-- **Auto-connect must be ON** in NordVPN settings (the script temporarily disables/re-enables it as needed)
+### Software
+- **NordVPN** for macOS, installed and logged in — https://nordvpn.com/download/mac/
 
-### Dependencies
-All built into macOS — no additional installation needed:
+### Dependencies (all built into macOS)
 
 | Command | Purpose |
 |---------|---------|
 | `bash` | Shell interpreter |
 | `ping` | Canary connectivity check |
-| `osascript` | Controls NordVPN via URL scheme (`nordvpn://disconnect`) |
-| `defaults` | Reads/writes NordVPN preferences (auto-connect toggle) |
+| `osascript` | Sends `nordvpn://connect` / `nordvpn://disconnect` URL schemes to NordVPN |
+| `defaults` | Reads/writes NordVPN's auto-connect preference |
 | `route` | Detects active network interface |
-| `pgrep` | Checks if NordVPN is running |
+| `pgrep` | Checks if NordVPN process is running |
 | `open` | Launches NordVPN app if not already running |
 
-**Verify:**
+**Verify all are present:**
 ```bash
 which bash ping osascript defaults route pgrep open
 ```
 
-### Accessibility Permissions (Required)
+### Accessibility Permissions
 
-The script uses AppleScript URL schemes to control NordVPN:
+The script uses AppleScript to send URL schemes to NordVPN. Terminal needs Accessibility access:
 
 1. **System Settings → Privacy & Security → Accessibility**
-2. Click the lock icon, enter your password
-3. Click **+** and add **Terminal**
-4. Ensure the checkbox is enabled
+2. Click the lock icon and authenticate
+3. Click **+**, add **Terminal**, enable the checkbox
 
-**Test it works:**
+**Quick test:**
 ```bash
 osascript -e 'open location "nordvpn://disconnect"'
 osascript -e 'open location "nordvpn://connect"'
@@ -87,29 +77,26 @@ osascript -e 'open location "nordvpn://connect"'
 
 ## Installation
 
-### 1. Download
+### 1. Clone the repository
 
-Clone or download this repository.
+```bash
+git clone https://github.com/ashwinraghavachari/nordvpn_helper.git
+cd nordvpn_helper
+```
 
-### 2. Verify Accessibility Permissions
-
-Set them up now (see above) before installing.
+### 2. Grant Accessibility permissions to Terminal (see above)
 
 ### 3. Install the scripts
 
 ```bash
-cd /path/to/nordvpn_helper
-
-# Install main script
 cp nordvpn_captive_portal_handler.sh ~/nordvpn_captive_portal_handler.sh
 chmod +x ~/nordvpn_captive_portal_handler.sh
 
-# Install control script
 cp control.sh ~/nordvpn_helper_control.sh
 chmod +x ~/nordvpn_helper_control.sh
 ```
 
-### 4. Set up the Launch Agent
+### 4. Install the Launch Agent
 
 ```bash
 mkdir -p ~/Library/LaunchAgents
@@ -117,7 +104,7 @@ sed "s/YOUR_USERNAME/$(whoami)/g" com.user.nordvpn.captiveportal.plist \
     > ~/Library/LaunchAgents/com.user.nordvpn.captiveportal.plist
 ```
 
-### 5. Enable and start
+### 5. Start
 
 ```bash
 ~/nordvpn_helper_control.sh start
@@ -127,55 +114,89 @@ sed "s/YOUR_USERNAME/$(whoami)/g" com.user.nordvpn.captiveportal.plist \
 
 ```bash
 ~/nordvpn_helper_control.sh status
-tail -f ~/Library/Logs/nordvpn_captive_portal.log
 ```
 
-## Control Script (Master Switch)
+## Trusted Networks
+
+Networks where you **don't want VPN** (e.g. home, office). On these networks the script lets the canary pass but skips connecting VPN.
+
+### Using control.sh (recommended)
 
 ```bash
-~/nordvpn_helper_control.sh start    # Enable and start
-~/nordvpn_helper_control.sh stop     # Disable and stop
-~/nordvpn_helper_control.sh status   # Check if running
-~/nordvpn_helper_control.sh restart  # Restart
-~/nordvpn_helper_control.sh logs     # View live logs
+# Trust the network you're currently connected to
+~/nordvpn_helper_control.sh trust
+
+# Trust a specific network by name
+~/nordvpn_helper_control.sh trust "My Home WiFi"
+
+# Remove the current network from the trusted list
+~/nordvpn_helper_control.sh untrust
+
+# Remove a specific network by name
+~/nordvpn_helper_control.sh untrust "My Home WiFi"
+
+# Show all trusted networks
+~/nordvpn_helper_control.sh trusted
+```
+
+### Editing the file directly
+
+Trusted networks are stored one SSID per line in `~/.nordvpn_trusted_networks`:
+
+```bash
+# Add a network
+echo "My Home WiFi" >> ~/.nordvpn_trusted_networks
+
+# View all
+cat ~/.nordvpn_trusted_networks
+
+# Edit
+nano ~/.nordvpn_trusted_networks
+```
+
+No restart needed — the script reads the file on every network change.
+
+## Control Commands
+
+```bash
+~/nordvpn_helper_control.sh start       # Enable and start
+~/nordvpn_helper_control.sh stop        # Disable and stop
+~/nordvpn_helper_control.sh status      # Status + trusted network list
+~/nordvpn_helper_control.sh restart     # Restart
+~/nordvpn_helper_control.sh logs        # Live log stream (Ctrl+C to exit)
+
+~/nordvpn_helper_control.sh trust       # Trust current WiFi
+~/nordvpn_helper_control.sh trust NAME  # Trust a named network
+~/nordvpn_helper_control.sh untrust     # Untrust current WiFi
+~/nordvpn_helper_control.sh untrust NAME # Untrust a named network
+~/nordvpn_helper_control.sh trusted     # List trusted networks
 ```
 
 ## Logs
 
 ```bash
-# Live logs
 tail -f ~/Library/Logs/nordvpn_captive_portal.log
-
-# Error logs
 cat ~/Library/Logs/nordvpn_captive_portal_stderr.log
 ```
 
 ## Troubleshooting
 
-### VPN not reconnecting after captive portal login
-
-- Check logs: `~/nordvpn_helper_control.sh logs`
-- Verify auto-connect is ON in NordVPN → Preferences → Auto-connect
+**VPN not connecting after captive portal login**
 - Confirm canary is reachable: `ping -c 1 google.com`
+- Check logs: `~/nordvpn_helper_control.sh logs`
+- Make sure the network is not in the trusted list: `~/nordvpn_helper_control.sh trusted`
 
-### VPN not disconnecting on network change
+**VPN not disconnecting on network change**
+- Verify Terminal has Accessibility permission (see above)
+- Test manually: `osascript -e 'open location "nordvpn://disconnect"'`
 
-- Check Accessibility permissions for Terminal (see above)
-- Test manually:
-  ```bash
-  osascript -e 'open location "nordvpn://disconnect"'
-  ```
+**NordVPN reconnecting on its own (fighting the script)**
+- The script should have disabled auto-connect at startup
+- Check: `defaults read ~/Library/Preferences/com.nordvpn.macos.plist isAutoConnectOn`
+  - Should be `0` while the script is running
+- Restart the script: `~/nordvpn_helper_control.sh restart`
 
-### Auto-connect toggle not working
-
-- Check the plist key directly:
-  ```bash
-  defaults read ~/Library/Preferences/com.nordvpn.macos.plist isAutoConnectOn
-  ```
-  Should flip between `0` (paused) and `1` (active) as the script runs.
-
-### Script not running
-
+**Script not running**
 ```bash
 ~/nordvpn_helper_control.sh status
 launchctl list | grep nordvpn
@@ -190,9 +211,9 @@ Edit `~/nordvpn_captive_portal_handler.sh`:
 |----------|---------|-------------|
 | `CHECK_INTERVAL` | `2` | Seconds between canary pings while waiting |
 | `NETWORK_SETTLE_DELAY` | `2` | Seconds to wait after a network change |
-| `CANARY_HOST` | `google.com` | Host to ping to detect real internet |
+| `CANARY_HOST` | `google.com` | Host to ping to detect internet |
 
-After editing, restart: `~/nordvpn_helper_control.sh restart`
+After editing: `~/nordvpn_helper_control.sh restart`
 
 ## Uninstall
 
@@ -201,21 +222,22 @@ After editing, restart: `~/nordvpn_helper_control.sh restart`
 rm ~/Library/LaunchAgents/com.user.nordvpn.captiveportal.plist
 rm ~/nordvpn_captive_portal_handler.sh
 rm ~/nordvpn_helper_control.sh
+rm ~/.nordvpn_trusted_networks   # optional
 ```
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `nordvpn_captive_portal_handler.sh` | Main script |
-| `control.sh` | Master switch |
-| `com.user.nordvpn.captiveportal.plist` | Launch Agent config |
-| `test_vpn_connect.sh` | VPN control diagnostic script |
-| `TESTING.md` | Detailed testing guide |
+| `nordvpn_captive_portal_handler.sh` | Main background script |
+| `control.sh` | Service and trusted-network management |
+| `com.user.nordvpn.captiveportal.plist` | Launch Agent (auto-start on login) |
+| `test_pause_resume.sh` | Pause/resume mechanism test |
+| `TESTING.md` | Manual testing guide |
 
 ## Security & Privacy
 
 - Runs with standard user permissions (no root/admin)
-- Only monitors network status and temporarily toggles NordVPN's auto-connect
-- All logs stored locally
+- Only monitors network state and controls NordVPN
+- All logs stored locally in `~/Library/Logs/`
 - No external data transmission beyond the canary ping to google.com
