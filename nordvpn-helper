@@ -249,22 +249,32 @@ case "$1" in
 
     trusted)
         # List all trusted networks
+        CURRENT=$(current_network_id)
+        GW="gw:$(route get default 2>/dev/null | awk '/gateway:/{print $2}')"
         if [[ ! -f "$TRUSTED_NETWORKS_FILE" ]] || [[ ! -s "$TRUSTED_NETWORKS_FILE" ]]; then
             echo "No trusted networks configured."
             echo ""
             echo "To add the current network:  $CMD trust"
             echo "To add a named network:      $CMD trust \"Network Name\""
         else
-            CURRENT=$(current_network_id)
+            # Warn when SSID-based entries exist but SSID is currently unreadable
+            NAME_ENTRIES=$(grep -v '^gw:' "$TRUSTED_NETWORKS_FILE" 2>/dev/null | grep -v '^$' || true)
+            if [[ "$CURRENT" == gw:* ]] && [[ -n "$NAME_ENTRIES" ]]; then
+                echo "Warning: SSID is unreadable on this machine (macOS Sequoia without"
+                echo "Location Services). These name-based entries won't match until you"
+                echo "reconnect to each network and run '$CMD trust' to add a gateway entry:"
+                echo "$NAME_ENTRIES" | sed 's/^/  ! /'
+                echo ""
+            fi
             echo "Trusted networks:"
             while IFS= read -r line; do
                 [[ -z "$line" ]] && continue
                 if [[ "$line" == gw:* ]]; then
                     label="${line}  (by gateway IP)"
                 else
-                    label="$line"
+                    label="$line  (by SSID name — re-run 'trust' to add gateway entry)"
                 fi
-                if [[ "$line" == "$CURRENT" ]]; then
+                if [[ "$line" == "$CURRENT" ]] || [[ "$line" == "$GW" ]]; then
                     echo "  - $label  ← currently connected"
                 else
                     echo "  - $label"

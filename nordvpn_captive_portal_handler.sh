@@ -156,10 +156,15 @@ canary_reachable() {
 # ──────────────────── Trusted network check ───────────────────
 
 is_trusted_network() {
-    local ssid="$1"
-    [ -z "$ssid" ] && return 1
+    local network_id="$1"
     [ ! -f "$TRUSTED_NETWORKS_FILE" ] && return 1
-    grep -qxF "$ssid" "$TRUSTED_NETWORKS_FILE"
+    # Check the primary identifier (SSID or gw:IP)
+    [[ -n "$network_id" ]] && grep -qxF "$network_id" "$TRUSTED_NETWORKS_FILE" && return 0
+    # Always also check the gateway IP so that either form of entry matches
+    local gw
+    gw="gw:$(get_gateway_ip)"
+    [[ "$gw" != "gw:" ]] && grep -qxF "$gw" "$TRUSTED_NETWORKS_FILE" && return 0
+    return 1
 }
 
 # ─────────────────────────── Main loop ────────────────────────
