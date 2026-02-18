@@ -7,26 +7,38 @@ SERVICE_NAME="com.user.nordvpn.captiveportal"
 TRUSTED_NETWORKS_FILE="$HOME/.nordvpn_trusted_networks"
 CMD="nordvpn-helper"
 
-# ── Helper: get current WiFi SSID ─────────────────────────────
-current_ssid() {
+# ── Helper: current network identifier ────────────────────────
+# Returns the Wi-Fi SSID when Location Services allows it (macOS Sequoia+),
+# or falls back to "gw:<gateway-ip>" which needs no special permissions.
+current_network_id() {
     local iface
     iface=$(networksetup -listallhardwareports 2>/dev/null \
         | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
-    [[ -z "$iface" ]] && return
 
-    local raw
-    raw=$(networksetup -getairportnetwork "$iface" 2>/dev/null)
-    case "$raw" in
-        "Current Wi-Fi Network: "*)
-            echo "${raw#Current Wi-Fi Network: }"
-            ;;
-        *)
-            # airport fallback for older macOS
-            /System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport -I 2>/dev/null \
-                | awk '/ SSID:/ {print $2}'
-            ;;
-    esac
+    if [[ -n "$iface" ]]; then
+        local raw
+        raw=$(networksetup -getairportnetwork "$iface" 2>/dev/null)
+        case "$raw" in
+            "Current Wi-Fi Network: "*)
+                echo "${raw#Current Wi-Fi Network: }"
+                return
+                ;;
+        esac
+        # airport fallback for older macOS
+        local ssid
+        ssid=$(/System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport \
+                   -I 2>/dev/null | awk '/ SSID:/ {print $2}')
+        [[ -n "$ssid" ]] && { echo "$ssid"; return; }
+    fi
+
+    # Fall back to gateway IP — no permissions needed, unique per router
+    local gw
+    gw=$(route get default 2>/dev/null | awk '/gateway:/{print $2}')
+    [[ -n "$gw" ]] && echo "gw:$gw"
 }
+
+# Alias used in older parts of the script
+current_ssid() { current_network_id; }
 
 # ── Helper: resolve SSID from arg or current network ──────────
 # Writes to stdout on success; writes error to stderr and returns 1 on failure.
@@ -88,15 +100,20 @@ case "$1" in
             echo "✗ Script is STOPPED"
         fi
         echo ""
-        CURRENT=$(current_ssid)
+        CURRENT=$(current_network_id)
         if [[ -n "$CURRENT" ]]; then
-            if [[ -f "$TRUSTED_NETWORKS_FILE" ]] && grep -qxF "$CURRENT" "$TRUSTED_NETWORKS_FILE" 2>/dev/null; then
-                echo "Current network: '$CURRENT' (trusted — VPN will not connect)"
+            if [[ "$CURRENT" == gw:* ]]; then
+                LABEL="gateway ${CURRENT#gw:} (SSID unavailable — no Location Services permission)"
             else
-                echo "Current network: '$CURRENT' (not trusted — VPN will connect)"
+                LABEL="'$CURRENT'"
+            fi
+            if [[ -f "$TRUSTED_NETWORKS_FILE" ]] && grep -qxF "$CURRENT" "$TRUSTED_NETWORKS_FILE" 2>/dev/null; then
+                echo "Current network: $LABEL  ✓ trusted — VPN will not connect"
+            else
+                echo "Current network: $LABEL  (not trusted — VPN will connect)"
             fi
         else
-            echo "Current network: ethernet / no WiFi SSID detected"
+            echo "Current network: not connected"
         fi
         echo ""
         if [[ -f "$TRUSTED_NETWORKS_FILE" ]] && [[ -s "$TRUSTED_NETWORKS_FILE" ]]; then
@@ -201,21 +218,20 @@ case "$1" in
             echo "✗ No Wi-Fi interface found"
         fi
 
-        # SSID detection
-        SSID=$(current_ssid)
-        if [[ -n "$SSID" ]]; then
-            echo "✓ SSID readable: '$SSID'"
+        # Network ID detection
+        NETID=$(current_network_id)
+        if [[ "$NETID" == gw:* ]]; then
+            GW="${NETID#gw:}"
+            echo "~ Network ID: gateway $GW (SSID unavailable)"
+            echo "  SSID reading requires Location Services for Terminal on macOS Sequoia."
+            echo "  The gateway IP fallback is used instead — trusted networks still work."
+            echo "  To enable SSID reading (optional):"
+            echo "    System Settings → Privacy & Security → Location Services"
+            echo "    → System Services → Details → Wi-Fi Networking → ON"
+        elif [[ -n "$NETID" ]]; then
+            echo "✓ Network ID: '$NETID' (SSID)"
         else
-            RAW=$(networksetup -getairportnetwork "$WIFI_IFACE" 2>/dev/null)
-            if [[ "$RAW" == "You are not associated"* ]]; then
-                echo "✗ SSID not readable — Location Services permission required:"
-                echo "  System Settings → Privacy & Security → Location Services"
-                echo "  → scroll down to Terminal → set to 'While Using'"
-                echo "  (macOS Sequoia removed the airport tool and requires this"
-                echo "   permission for any app reading Wi-Fi network names)"
-            else
-                echo "  SSID: not connected to Wi-Fi"
-            fi
+            echo "  Not connected to any network"
         fi
 
         # Canary
@@ -239,14 +255,19 @@ case "$1" in
             echo "To add the current network:  $CMD trust"
             echo "To add a named network:      $CMD trust \"Network Name\""
         else
-            CURRENT=$(current_ssid)
+            CURRENT=$(current_network_id)
             echo "Trusted networks:"
             while IFS= read -r line; do
                 [[ -z "$line" ]] && continue
-                if [[ "$line" == "$CURRENT" ]]; then
-                    echo "  - $line  (currently connected)"
+                if [[ "$line" == gw:* ]]; then
+                    label="${line}  (by gateway IP)"
                 else
-                    echo "  - $line"
+                    label="$line"
+                fi
+                if [[ "$line" == "$CURRENT" ]]; then
+                    echo "  - $label  ← currently connected"
+                else
+                    echo "  - $label"
                 fi
             done < "$TRUSTED_NETWORKS_FILE"
         fi

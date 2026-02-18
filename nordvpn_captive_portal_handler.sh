@@ -106,31 +106,44 @@ vpn_disconnect() {
 # ─────────────────────── Network helpers ──────────────────────
 
 get_wifi_interface() {
-    # Find the system's Wi-Fi interface name (usually en0, but not always)
     networksetup -listallhardwareports 2>/dev/null \
         | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}'
 }
 
-get_ssid() {
+get_gateway_ip() {
+    route get default 2>/dev/null | awk '/gateway:/{print $2}'
+}
+
+# Returns a stable identifier for the current network.
+# Prefers the Wi-Fi SSID (requires Terminal → Location Services on Sequoia).
+# Falls back to "gw:<gateway-ip>" which requires no permissions and is unique
+# enough for trusted-network purposes on most networks.
+get_network_id() {
     local iface
     iface=$(get_wifi_interface)
-    [[ -z "$iface" ]] && return
-
-    # macOS Sequoia+ requires Location Services for Terminal to see SSIDs.
-    # networksetup returns "You are not associated..." when permission is missing.
-    local raw
-    raw=$(networksetup -getairportnetwork "$iface" 2>/dev/null)
-    case "$raw" in
-        "Current Wi-Fi Network: "*)
-            echo "${raw#Current Wi-Fi Network: }"
-            ;;
+    if [[ -n "$iface" ]]; then
+        local raw
+        raw=$(networksetup -getairportnetwork "$iface" 2>/dev/null)
+        case "$raw" in
+            "Current Wi-Fi Network: "*)
+                echo "${raw#Current Wi-Fi Network: }"
+                return
+                ;;
+        esac
         # airport fallback for older macOS (removed in Sequoia)
-        *)
-            /System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport -I 2>/dev/null \
-                | awk '/ SSID:/ {print $2}'
-            ;;
-    esac
+        local ssid
+        ssid=$(/System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport \
+                   -I 2>/dev/null | awk '/ SSID:/ {print $2}')
+        [[ -n "$ssid" ]] && { echo "$ssid"; return; }
+    fi
+    # No SSID readable — fall back to gateway IP as network identifier
+    local gw
+    gw=$(get_gateway_ip)
+    [[ -n "$gw" ]] && echo "gw:$gw"
 }
+
+# Keep get_ssid as an alias so nothing else breaks
+get_ssid() { get_network_id; }
 
 has_network_interface() {
     route get default 2>/dev/null | grep -q "interface:"
