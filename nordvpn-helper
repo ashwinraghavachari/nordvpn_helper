@@ -67,10 +67,26 @@ _network_label() {
         gw:*)
             echo "gateway ${id#gw:}  (MAC unknown — re-run 'trust' to upgrade)"
             ;;
+        subnet:*)
+            echo "subnet ${id#subnet:}  (any gateway in this range)"
+            ;;
         *)
             echo "'$id'  (SSID)"
             ;;
     esac
+}
+
+# Returns true if the current gateway IP falls within a CIDR range
+_ip_in_subnet() {
+    local ip="$1" cidr="$2"
+    local net="${cidr%/*}" bits="${cidr#*/}"
+    local a b c d
+    IFS=. read -r a b c d <<< "$ip"
+    local ip_int=$(( (a<<24) + (b<<16) + (c<<8) + d ))
+    IFS=. read -r a b c d <<< "$net"
+    local net_int=$(( (a<<24) + (b<<16) + (c<<8) + d ))
+    local mask=$(( (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF ))
+    [[ $(( ip_int & mask )) -eq $(( net_int & mask )) ]]
 }
 
 # ── Helper: resolve SSID from arg or current network ──────────
@@ -210,6 +226,59 @@ case "$1" in
         fi
         ;;
 
+    trust-subnet)
+        # trust-subnet CIDR  — trust any network whose gateway falls in the range
+        # e.g.: nordvpn-helper trust-subnet 10.0.0.0/8
+        CIDR="$2"
+        if [[ -z "$CIDR" ]]; then
+            echo "Usage: $CMD trust-subnet CIDR"
+            echo "Example: $CMD trust-subnet 10.0.0.0/8"
+            echo ""
+            echo "Use this for mesh or enterprise networks where each access point"
+            echo "may have a different gateway IP but all fall within the same subnet."
+            echo ""
+            GW=$(_get_gateway_ip)
+            [[ -n "$GW" ]] && echo "Your current gateway IP is: $GW"
+            exit 1
+        fi
+        # Basic CIDR format validation
+        if ! [[ "$CIDR" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+            echo "Error: '$CIDR' is not a valid CIDR range (e.g. 10.0.0.0/8)"
+            exit 1
+        fi
+        touch "$TRUSTED_NETWORKS_FILE"
+        ENTRY="subnet:$CIDR"
+        if grep -qxF "$ENTRY" "$TRUSTED_NETWORKS_FILE" 2>/dev/null; then
+            echo "Already trusted: subnet $CIDR"
+        else
+            echo "$ENTRY" >> "$TRUSTED_NETWORKS_FILE"
+            echo "✓ Added to trusted networks: subnet $CIDR"
+            echo "  VPN will not connect on any network whose gateway is in this range."
+        fi
+        # Check if current gateway is already in this subnet
+        GW=$(_get_gateway_ip)
+        if [[ -n "$GW" ]] && _ip_in_subnet "$GW" "$CIDR"; then
+            echo "  Current gateway $GW is in this subnet — disconnecting VPN..."
+            osascript -e 'open location "nordvpn://disconnect"' 2>/dev/null
+        fi
+        ;;
+
+    untrust-subnet)
+        CIDR="$2"
+        if [[ -z "$CIDR" ]]; then
+            echo "Usage: $CMD untrust-subnet CIDR"
+            exit 1
+        fi
+        ENTRY="subnet:$CIDR"
+        if ! grep -qxF "$ENTRY" "$TRUSTED_NETWORKS_FILE" 2>/dev/null; then
+            echo "Not in trusted list: subnet $CIDR"
+        else
+            grep -vxF "$ENTRY" "$TRUSTED_NETWORKS_FILE" > "${TRUSTED_NETWORKS_FILE}.tmp"; \
+                mv "${TRUSTED_NETWORKS_FILE}.tmp" "$TRUSTED_NETWORKS_FILE"
+            echo "✓ Removed from trusted networks: subnet $CIDR"
+        fi
+        ;;
+
     untrust)
         # untrust [SSID]  — remove current or named network from trusted list
         SSID=$(resolve_ssid "$2") || exit 1
@@ -294,7 +363,7 @@ case "$1" in
             echo "To add the current network:  $CMD trust"
             echo "To add a named network:      $CMD trust \"Network Name\""
         else
-            NAME_ENTRIES=$(grep -v '^gw:' "$TRUSTED_NETWORKS_FILE" 2>/dev/null | grep -v '^$' || true)
+            NAME_ENTRIES=$(grep -v '^gw:' "$TRUSTED_NETWORKS_FILE" 2>/dev/null | grep -v '^subnet:' | grep -v '^$' || true)
             if [[ "$CURRENT" == gw:* ]] && [[ -n "$NAME_ENTRIES" ]]; then
                 echo "Warning: SSID is unreadable on this machine (macOS Sequoia without"
                 echo "Location Services). These name-based entries won't match until you"
@@ -310,6 +379,9 @@ case "$1" in
                 [[ "$line" == "$CURRENT" ]] && is_current=true
                 [[ -n "$GW" && -n "$MAC" && "$line" == "gw:${GW}/${MAC}" ]] && is_current=true
                 [[ -n "$GW" && "$line" == "gw:${GW}" ]] && is_current=true
+                if [[ "$line" == subnet:* && -n "$GW" ]]; then
+                    _ip_in_subnet "$GW" "${line#subnet:}" && is_current=true
+                fi
                 if $is_current; then
                     echo "  - $label  ← currently connected"
                 else
@@ -331,11 +403,13 @@ case "$1" in
         echo "  $CMD diagnose           Check permissions and SSID detection"
         echo ""
         echo "Trusted networks (networks where VPN will NOT connect):"
-        echo "  $CMD trust              Trust the current WiFi network"
-        echo "  $CMD trust \"Name\"       Trust a specific network by name"
-        echo "  $CMD untrust            Remove current WiFi from trusted list"
-        echo "  $CMD untrust \"Name\"     Remove a specific network by name"
-        echo "  $CMD trusted            List all trusted networks"
+        echo "  $CMD trust                   Trust the current network (by router MAC)"
+        echo "  $CMD trust \"Name\"            Trust a network by SSID name"
+        echo "  $CMD trust-subnet 10.0.0.0/8 Trust any gateway in a subnet (mesh networks)"
+        echo "  $CMD untrust                 Remove current network from trusted list"
+        echo "  $CMD untrust \"Name\"          Remove a specific entry"
+        echo "  $CMD untrust-subnet 10.0.0.0/8  Remove a subnet entry"
+        echo "  $CMD trusted                 List all trusted networks"
         exit 1
         ;;
 esac

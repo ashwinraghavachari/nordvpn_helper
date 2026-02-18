@@ -168,17 +168,42 @@ canary_reachable() {
 
 # ──────────────────── Trusted network check ───────────────────
 
+# Returns true if IP is within a CIDR range (e.g. 10.0.0.0/8)
+_ip_in_subnet() {
+    local ip="$1" cidr="$2"
+    local net="${cidr%/*}" bits="${cidr#*/}"
+    local a b c d
+    IFS=. read -r a b c d <<< "$ip"
+    local ip_int=$(( (a<<24) + (b<<16) + (c<<8) + d ))
+    IFS=. read -r a b c d <<< "$net"
+    local net_int=$(( (a<<24) + (b<<16) + (c<<8) + d ))
+    local mask=$(( (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF ))
+    [[ $(( ip_int & mask )) -eq $(( net_int & mask )) ]]
+}
+
 is_trusted_network() {
     local network_id="$1"
     [ ! -f "$TRUSTED_NETWORKS_FILE" ] && return 1
-    # Exact match on the full network ID (SSID or gw:IP/MAC)
+
+    # Exact match (SSID, gw:IP/MAC, or gw:IP)
     [[ -n "$network_id" ]] && grep -qxF "$network_id" "$TRUSTED_NETWORKS_FILE" && return 0
-    # Also check bare gateway IP for backwards compatibility with old entries
+
+    # Backwards-compatible bare gateway IP check
     local gw mac
     gw=$(get_gateway_ip)
     mac=$(get_router_mac)
     [[ -n "$gw" && -n "$mac" ]] && grep -qxF "gw:${gw}/${mac}" "$TRUSTED_NETWORKS_FILE" && return 0
     [[ -n "$gw" ]]              && grep -qxF "gw:${gw}"         "$TRUSTED_NETWORKS_FILE" && return 0
+
+    # Subnet match — for mesh/enterprise networks where the gateway changes
+    # Entry format: subnet:10.0.0.0/8
+    if [[ -n "$gw" ]]; then
+        while IFS= read -r line; do
+            [[ "$line" == subnet:* ]] || continue
+            _ip_in_subnet "$gw" "${line#subnet:}" && return 0
+        done < "$TRUSTED_NETWORKS_FILE"
+    fi
+
     return 1
 }
 
