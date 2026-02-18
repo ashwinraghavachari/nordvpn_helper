@@ -13,14 +13,16 @@ current_ssid() {
 }
 
 # ── Helper: resolve SSID from arg or current network ──────────
+# Writes to stdout on success; writes error to stderr and returns 1 on failure.
+# Call as: SSID=$(resolve_ssid "$2") || exit 1
 resolve_ssid() {
     local ssid="$1"
     if [[ -z "$ssid" ]]; then
         ssid=$(current_ssid)
         if [[ -z "$ssid" ]]; then
-            echo "Error: Not connected to WiFi and no SSID provided."
-            echo "Usage: $0 trust \"Network Name\""
-            exit 1
+            echo "Error: Not connected to WiFi and no SSID provided." >&2
+            echo "Usage: $(basename "$0") trust \"Network Name\"" >&2
+            return 1
         fi
     fi
     echo "$ssid"
@@ -81,9 +83,18 @@ case "$1" in
     restart|reload)
         echo "Restarting NordVPN Captive Portal Handler..."
         launchctl unload "$PLIST_PATH" 2>/dev/null
-        sleep 2
-        launchctl load "$PLIST_PATH" 2>/dev/null
         sleep 1
+        # Relaunch NordVPN so it re-reads the plist with auto-connect disabled
+        # and URL schemes are responsive again on a fresh session
+        if pgrep -xf "/Applications/NordVPN.app/Contents/MacOS/NordVPN" > /dev/null 2>&1; then
+            echo "Restarting NordVPN app..."
+            killall NordVPN 2>/dev/null
+            sleep 2
+            open -a NordVPN
+            sleep 4
+        fi
+        launchctl load "$PLIST_PATH" 2>/dev/null
+        sleep 2
         if launchctl list | grep -q "$SERVICE_NAME"; then
             echo "✓ Script restarted"
         else
@@ -102,7 +113,7 @@ case "$1" in
 
     trust)
         # trust [SSID]  — add current or named network to trusted list
-        SSID=$(resolve_ssid "$2")
+        SSID=$(resolve_ssid "$2") || exit 1
         touch "$TRUSTED_NETWORKS_FILE"
         if grep -qxF "$SSID" "$TRUSTED_NETWORKS_FILE" 2>/dev/null; then
             echo "Already trusted: '$SSID'"
@@ -111,11 +122,18 @@ case "$1" in
             echo "✓ Added to trusted networks: '$SSID'"
             echo "  VPN will not connect on this network."
         fi
+        # If currently on this network, disconnect VPN immediately
+        CURRENT=$(current_ssid)
+        if [[ "$CURRENT" == "$SSID" ]]; then
+            echo "  Disconnecting VPN (you are on this network now)..."
+            osascript -e 'open location "nordvpn://disconnect"' 2>/dev/null
+            echo "  Note: if VPN stays connected, restart the service: $(basename "$0") restart"
+        fi
         ;;
 
     untrust)
         # untrust [SSID]  — remove current or named network from trusted list
-        SSID=$(resolve_ssid "$2")
+        SSID=$(resolve_ssid "$2") || exit 1
         if [[ ! -f "$TRUSTED_NETWORKS_FILE" ]] || ! grep -qxF "$SSID" "$TRUSTED_NETWORKS_FILE" 2>/dev/null; then
             echo "Not in trusted list: '$SSID'"
         else
