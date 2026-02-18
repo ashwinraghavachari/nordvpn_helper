@@ -9,8 +9,23 @@ CMD="nordvpn-helper"
 
 # ── Helper: get current WiFi SSID ─────────────────────────────
 current_ssid() {
-    /System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport -I 2>/dev/null \
-        | awk '/ SSID:/ {print $2}'
+    local iface
+    iface=$(networksetup -listallhardwareports 2>/dev/null \
+        | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
+    [[ -z "$iface" ]] && return
+
+    local raw
+    raw=$(networksetup -getairportnetwork "$iface" 2>/dev/null)
+    case "$raw" in
+        "Current Wi-Fi Network: "*)
+            echo "${raw#Current Wi-Fi Network: }"
+            ;;
+        *)
+            # airport fallback for older macOS
+            /System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport -I 2>/dev/null \
+                | awk '/ SSID:/ {print $2}'
+            ;;
+    esac
 }
 
 # ── Helper: resolve SSID from arg or current network ──────────
@@ -158,6 +173,64 @@ case "$1" in
         fi
         ;;
 
+    diagnose)
+        echo "nordvpn-helper diagnostics"
+        echo "══════════════════════════"
+        echo ""
+
+        # NordVPN
+        if [ -d /Applications/NordVPN.app ]; then
+            echo "✓ NordVPN installed"
+        else
+            echo "✗ NordVPN not found at /Applications/NordVPN.app"
+        fi
+
+        # Handler running
+        if launchctl list | grep -q "$SERVICE_NAME"; then
+            echo "✓ Handler is running"
+        else
+            echo "✗ Handler is not running  →  nordvpn-helper start"
+        fi
+
+        # WiFi interface
+        WIFI_IFACE=$(networksetup -listallhardwareports 2>/dev/null \
+            | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
+        if [[ -n "$WIFI_IFACE" ]]; then
+            echo "✓ Wi-Fi interface: $WIFI_IFACE"
+        else
+            echo "✗ No Wi-Fi interface found"
+        fi
+
+        # SSID detection
+        SSID=$(current_ssid)
+        if [[ -n "$SSID" ]]; then
+            echo "✓ SSID readable: '$SSID'"
+        else
+            RAW=$(networksetup -getairportnetwork "$WIFI_IFACE" 2>/dev/null)
+            if [[ "$RAW" == "You are not associated"* ]]; then
+                echo "✗ SSID not readable — Location Services permission required:"
+                echo "  System Settings → Privacy & Security → Location Services"
+                echo "  → scroll down to Terminal → set to 'While Using'"
+                echo "  (macOS Sequoia removed the airport tool and requires this"
+                echo "   permission for any app reading Wi-Fi network names)"
+            else
+                echo "  SSID: not connected to Wi-Fi"
+            fi
+        fi
+
+        # Canary
+        if ping -c 1 -W 2 google.com > /dev/null 2>&1; then
+            echo "✓ Canary (google.com) reachable — internet is up"
+        else
+            echo "✗ Canary (google.com) unreachable — captive portal or no internet"
+        fi
+
+        # VPN connect URL scheme
+        echo ""
+        echo "URL scheme test (nordvpn://connect — watch NordVPN UI):"
+        echo "  Run: osascript -e 'open location \"nordvpn://connect\"'"
+        ;;
+
     trusted)
         # List all trusted networks
         if [[ ! -f "$TRUSTED_NETWORKS_FILE" ]] || [[ ! -s "$TRUSTED_NETWORKS_FILE" ]]; then
@@ -188,6 +261,7 @@ case "$1" in
         echo "  $CMD status             Show status and trusted networks"
         echo "  $CMD restart            Restart"
         echo "  $CMD logs               View live logs"
+        echo "  $CMD diagnose           Check permissions and SSID detection"
         echo ""
         echo "Trusted networks (networks where VPN will NOT connect):"
         echo "  $CMD trust              Trust the current WiFi network"

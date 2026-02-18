@@ -105,9 +105,31 @@ vpn_disconnect() {
 
 # ─────────────────────── Network helpers ──────────────────────
 
+get_wifi_interface() {
+    # Find the system's Wi-Fi interface name (usually en0, but not always)
+    networksetup -listallhardwareports 2>/dev/null \
+        | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}'
+}
+
 get_ssid() {
-    /System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport -I 2>/dev/null \
-        | awk '/ SSID:/ {print $2}'
+    local iface
+    iface=$(get_wifi_interface)
+    [[ -z "$iface" ]] && return
+
+    # macOS Sequoia+ requires Location Services for Terminal to see SSIDs.
+    # networksetup returns "You are not associated..." when permission is missing.
+    local raw
+    raw=$(networksetup -getairportnetwork "$iface" 2>/dev/null)
+    case "$raw" in
+        "Current Wi-Fi Network: "*)
+            echo "${raw#Current Wi-Fi Network: }"
+            ;;
+        # airport fallback for older macOS (removed in Sequoia)
+        *)
+            /System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport -I 2>/dev/null \
+                | awk '/ SSID:/ {print $2}'
+            ;;
+    esac
 }
 
 has_network_interface() {

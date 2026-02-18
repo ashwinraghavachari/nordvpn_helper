@@ -11,6 +11,7 @@ nordvpn-helper stop       # Turn the script OFF
 nordvpn-helper restart    # Restart (also relaunches NordVPN app)
 nordvpn-helper status     # Is it running? What networks are trusted?
 nordvpn-helper logs       # Watch live logs (Ctrl+C to exit)
+nordvpn-helper diagnose   # Check permissions and SSID detection
 
 # Trusted networks — WiFi SSIDs where VPN will NOT connect
 nordvpn-helper trust              # Trust the WiFi you're currently on
