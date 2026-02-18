@@ -6,18 +6,18 @@ Automatically manages NordVPN on macOS to prevent crash loops when connecting to
 
 ```bash
 # Service
-~/nordvpn_helper_control.sh start       # Turn the script ON
-~/nordvpn_helper_control.sh stop        # Turn the script OFF
-~/nordvpn_helper_control.sh restart     # Restart (also relaunches NordVPN)
-~/nordvpn_helper_control.sh status      # Is it running? What networks are trusted?
-~/nordvpn_helper_control.sh logs        # Watch live logs (Ctrl+C to exit)
+nordvpn-helper start      # Turn the script ON
+nordvpn-helper stop       # Turn the script OFF
+nordvpn-helper restart    # Restart (also relaunches NordVPN app)
+nordvpn-helper status     # Is it running? What networks are trusted?
+nordvpn-helper logs       # Watch live logs (Ctrl+C to exit)
 
-# Trusted networks (WiFi SSIDs where VPN will NOT connect)
-~/nordvpn_helper_control.sh trust       # Trust the WiFi you're on right now
-~/nordvpn_helper_control.sh trust "Name"    # Trust a network by name
-~/nordvpn_helper_control.sh untrust         # Remove current WiFi from trust list
-~/nordvpn_helper_control.sh untrust "Name"  # Remove a network by name
-~/nordvpn_helper_control.sh trusted         # List all trusted networks
+# Trusted networks — WiFi SSIDs where VPN will NOT connect
+nordvpn-helper trust              # Trust the WiFi you're currently on
+nordvpn-helper trust "Net Name"   # Trust a network by name
+nordvpn-helper untrust            # Remove current WiFi from the trust list
+nordvpn-helper untrust "Net Name" # Remove a network by name
+nordvpn-helper trusted            # List all trusted networks
 ```
 
 ## Problem Solved
@@ -104,57 +104,54 @@ cd nordvpn_helper
 
 ### 2. Grant Accessibility permissions to Terminal (see above)
 
-### 3. Install the scripts
+### 3. Run setup
 
 ```bash
-cp nordvpn_captive_portal_handler.sh ~/nordvpn_captive_portal_handler.sh
-chmod +x ~/nordvpn_captive_portal_handler.sh
-
-cp control.sh ~/nordvpn_helper_control.sh
-chmod +x ~/nordvpn_helper_control.sh
+bash setup.sh
 ```
 
-### 4. Install the Launch Agent
+This single command:
+- Makes scripts executable
+- Creates a `nordvpn-helper` symlink in `~/.local/bin`
+- Adds `~/.local/bin` to your PATH in `~/.zshrc`
+- Installs the Launch Agent pointing at this repo
+- Starts the handler immediately
+
+### 4. Reload your shell
 
 ```bash
-mkdir -p ~/Library/LaunchAgents
-sed "s/YOUR_USERNAME/$(whoami)/g" com.user.nordvpn.captiveportal.plist \
-    > ~/Library/LaunchAgents/com.user.nordvpn.captiveportal.plist
+source ~/.zshrc
 ```
 
-### 5. Start
+### 5. Verify
 
 ```bash
-~/nordvpn_helper_control.sh start
+nordvpn-helper status
 ```
 
-### 6. Verify
-
-```bash
-~/nordvpn_helper_control.sh status
-```
+> If you ever move the repo to a different location, just run `bash setup.sh` again.
 
 ## Trusted Networks
 
 Networks where you **don't want VPN** (e.g. home, office). On these networks the script lets the canary pass but skips connecting VPN.
 
-### Using control.sh (recommended)
+### Using nordvpn-helper (recommended)
 
 ```bash
 # Trust the network you're currently connected to
-~/nordvpn_helper_control.sh trust
+nordvpn-helper trust
 
 # Trust a specific network by name
-~/nordvpn_helper_control.sh trust "My Home WiFi"
+nordvpn-helper trust "My Home WiFi"
 
 # Remove the current network from the trusted list
-~/nordvpn_helper_control.sh untrust
+nordvpn-helper untrust
 
 # Remove a specific network by name
-~/nordvpn_helper_control.sh untrust "My Home WiFi"
+nordvpn-helper untrust "My Home WiFi"
 
 # Show all trusted networks
-~/nordvpn_helper_control.sh trusted
+nordvpn-helper trusted
 ```
 
 ### Editing the file directly
@@ -177,17 +174,17 @@ No restart needed — the script reads the file on every network change.
 ## Control Commands
 
 ```bash
-~/nordvpn_helper_control.sh start       # Enable and start
-~/nordvpn_helper_control.sh stop        # Disable and stop
-~/nordvpn_helper_control.sh status      # Status + trusted network list
-~/nordvpn_helper_control.sh restart     # Restart
-~/nordvpn_helper_control.sh logs        # Live log stream (Ctrl+C to exit)
+nordvpn-helper start       # Enable and start
+nordvpn-helper stop        # Disable and stop
+nordvpn-helper status      # Status + trusted network list
+nordvpn-helper restart     # Restart
+nordvpn-helper logs        # Live log stream (Ctrl+C to exit)
 
-~/nordvpn_helper_control.sh trust       # Trust current WiFi
-~/nordvpn_helper_control.sh trust NAME  # Trust a named network
-~/nordvpn_helper_control.sh untrust     # Untrust current WiFi
-~/nordvpn_helper_control.sh untrust NAME # Untrust a named network
-~/nordvpn_helper_control.sh trusted     # List trusted networks
+nordvpn-helper trust       # Trust current WiFi
+nordvpn-helper trust NAME  # Trust a named network
+nordvpn-helper untrust     # Untrust current WiFi
+nordvpn-helper untrust NAME # Untrust a named network
+nordvpn-helper trusted     # List trusted networks
 ```
 
 ## Logs
@@ -201,8 +198,8 @@ cat ~/Library/Logs/nordvpn_captive_portal_stderr.log
 
 **VPN not connecting after captive portal login**
 - Confirm canary is reachable: `ping -c 1 google.com`
-- Check logs: `~/nordvpn_helper_control.sh logs`
-- Make sure the network is not in the trusted list: `~/nordvpn_helper_control.sh trusted`
+- Check logs: `nordvpn-helper logs`
+- Make sure the network is not in the trusted list: `nordvpn-helper trusted`
 
 **VPN not disconnecting on network change**
 - Verify Terminal has Accessibility permission (see above)
@@ -212,11 +209,11 @@ cat ~/Library/Logs/nordvpn_captive_portal_stderr.log
 - The script should have disabled auto-connect at startup
 - Check: `defaults read ~/Library/Preferences/com.nordvpn.macos.plist isAutoConnectOn`
   - Should be `0` while the script is running
-- Restart the script: `~/nordvpn_helper_control.sh restart`
+- Restart the script: `nordvpn-helper restart`
 
 **Script not running**
 ```bash
-~/nordvpn_helper_control.sh status
+nordvpn-helper status
 launchctl list | grep nordvpn
 cat ~/Library/Logs/nordvpn_captive_portal_stderr.log
 ```
@@ -231,25 +228,26 @@ Edit `~/nordvpn_captive_portal_handler.sh`:
 | `NETWORK_SETTLE_DELAY` | `2` | Seconds to wait after a network change |
 | `CANARY_HOST` | `google.com` | Host to ping to detect internet |
 
-After editing: `~/nordvpn_helper_control.sh restart`
+After editing: `nordvpn-helper restart`
 
 ## Uninstall
 
 ```bash
-~/nordvpn_helper_control.sh stop
+nordvpn-helper stop
 rm ~/Library/LaunchAgents/com.user.nordvpn.captiveportal.plist
-rm ~/nordvpn_captive_portal_handler.sh
-rm ~/nordvpn_helper_control.sh
-rm ~/.nordvpn_trusted_networks   # optional
+rm ~/.local/bin/nordvpn-helper
+rm ~/.nordvpn_trusted_networks   # optional — your trusted networks list
+# Then delete the repo directory itself
 ```
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `nordvpn_captive_portal_handler.sh` | Main background script |
-| `control.sh` | Service and trusted-network management |
-| `com.user.nordvpn.captiveportal.plist` | Launch Agent (auto-start on login) |
+| `setup.sh` | One-time install: symlink, PATH, Launch Agent, start |
+| `nordvpn-helper` | All user-facing commands (start/stop/trust/etc.) |
+| `nordvpn_captive_portal_handler.sh` | Background handler (run by launchd) |
+| `com.user.nordvpn.captiveportal.plist` | Launch Agent template |
 | `test_pause_resume.sh` | Pause/resume mechanism test |
 | `TESTING.md` | Manual testing guide |
 
